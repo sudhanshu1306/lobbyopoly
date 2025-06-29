@@ -6,8 +6,9 @@ import pathlib
 import fastapi
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import RedirectResponse
-from starlette.middleware.sessions import SessionMiddleware
 from starlette.middleware.gzip import GZipMiddleware
+import starsessions
+import starsessions.stores.redis
 
 # local imports
 from .api import apiRouter
@@ -25,8 +26,14 @@ app.add_event_handler("shutdown", close_db_connect)
 app.add_middleware(GZipMiddleware, minimum_size=256)
 
 # Add session middleware
+# app.add_middleware(
+#     SessionMiddleware, secret_key=os.environ.get("SESSION_SECRET_KEY", "42")
+# )
+session_store = starsessions.stores.redis.RedisStore(
+    os.environ.get("REDIS_URL", None)
+)
 app.add_middleware(
-    SessionMiddleware, secret_key=os.environ.get("SESSION_SECRET_KEY", "42")
+    starsessions.SessionMiddleware, store=session_store, lifetime=3600 * 24 * 7
 )
 
 # Attach the API routes

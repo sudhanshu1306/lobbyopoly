@@ -32,7 +32,7 @@
   "peacock.remoteColor": "#e1403e",
   "editor.formatOnSave": true,
   "editor.codeActionsOnSave": {
-    "source.fixAll": true
+    "source.fixAll": "explicit"
   },
   "eslint.validate": ["javascript"],
   "python.analysis.typeCheckingMode": "basic",

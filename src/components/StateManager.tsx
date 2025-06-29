@@ -55,7 +55,7 @@ export function StateManager({ children }: PropsWithChildren) {
 
   const currentPlayerId = useRef<string>();
   useEffect(() => {
-    currentPlayerId.current = globalState.currentPlayer?._id.$oid;
+    currentPlayerId.current = globalState.currentPlayer?.id.$oid;
   }, [globalState.currentPlayer]);
 
   // When messages are received, decode them and store the data in the state

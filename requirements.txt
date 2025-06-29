@@ -5,4 +5,6 @@ itsdangerous
 motor
 motor-types
 pydantic
+beanie~=1.30.0
 typer
+starsessions[redis]~=2.2.1

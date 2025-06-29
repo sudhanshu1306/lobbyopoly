@@ -1,6 +1,7 @@
 # stdlib imports
 
 # vendor imports
+import beanie
 import bson.json_util
 import fastapi
 import starlette.websockets
@@ -21,8 +22,8 @@ def compose_update_message(
         {
             "type": "update",
             "payload": {
-                "lobby": lobby.document(),
-                "events": [e.document() for e in events],
+                "lobby": lobby.model_dump(),
+                "events": [e.model_dump() for e in events],
             },
         }
     )
@@ -39,24 +40,25 @@ def compose_kick_message(
 class ConnectionManager:
     def __init__(self) -> None:
         self.lobby_sockets: dict[
-            model.db.ObjectId, list[fastapi.WebSocket]
+            beanie.PydanticObjectId, list[fastapi.WebSocket]
         ] = {}
 
     def register_connection(
-        self, lobby_id: model.db.ObjectId, sock: fastapi.WebSocket
+        self, lobby_id: beanie.PydanticObjectId, sock: fastapi.WebSocket
     ) -> None:
         if lobby_id not in self.lobby_sockets:
             self.lobby_sockets[lobby_id] = []
         self.lobby_sockets[lobby_id].append(sock)
 
     def remove_connection(
-        self, lobby_id: model.db.ObjectId, sock: fastapi.WebSocket
+        self, lobby_id: beanie.PydanticObjectId, sock: fastapi.WebSocket
     ):
         if lobby_id in self.lobby_sockets:
             self.lobby_sockets[lobby_id].remove(sock)
 
     async def send_message_to_lobby(self, lobby: model.db.Lobby, message: str):
         """Send a string message to all players in a lobby."""
+        assert lobby.id is not None
         for sock in self.lobby_sockets.get(lobby.id, []):
             if (
                 sock.application_state
@@ -65,7 +67,9 @@ class ConnectionManager:
                 await sock.send_text(message)
 
     async def broadcast_update(
-        self, lobby: model.db.Lobby, events: list[model.db.Event] = []
+        self,
+        lobby: model.db.Lobby,
+        events: list[model.db.Event] = [],
     ):
         """Broadcast a new event to all players in a lobby"""
         await self.send_message_to_lobby(
@@ -92,21 +96,19 @@ async def socket_endpoint(websocket: fastapi.WebSocket, lobby_id: str):
     await websocket.accept()
 
     # Try to find the lobby by ID, and close the connection if not found
-    lobby = await model.db.Lobby.get_by_id(model.db.ObjectId(lobby_id))
+    lobby = await model.db.Lobby.get(lobby_id)
     if lobby is None:
         await websocket.close()
         return
+    assert lobby.id is not None
 
     # Begin by sending all the current events to the client
-    db = model.db.get_db()
-    events = [
-        model.db.Event.parse_document(e)
-        for e in await db[model.db.Event.collection]
-        .find({"lobby": lobby.id})
-        .sort("time", 1)
-        .to_list(None)
-    ]
-    await websocket.send_text(compose_update_message(lobby, events))
+    event_docs = (
+        await model.db.Event.find(model.db.Event.lobby == lobby.id)
+        .sort([("time", beanie.SortDirection.ASCENDING)])
+        .to_list()
+    )
+    await websocket.send_text(compose_update_message(lobby, event_docs))
 
     # Then register the websocket to receive future updates
     manager.register_connection(lobby.id, websocket)

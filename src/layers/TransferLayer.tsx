@@ -186,7 +186,7 @@ export default function useTransferLayer(): [
     }
 
     globalState.lobby?.players
-      .filter((ply) => ply._id.$oid !== globalState.playerId || nonPlayerSource)
+      .filter((ply) => ply.id.$oid !== globalState.playerId || nonPlayerSource)
       .map((ply) =>
         targets.push({
           icon: (
@@ -198,7 +198,7 @@ export default function useTransferLayer(): [
             />
           ),
           label: ply.name,
-          value: ply._id.$oid,
+          value: ply.id.$oid,
         }),
       );
 

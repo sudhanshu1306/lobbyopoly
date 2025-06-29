@@ -61,9 +61,9 @@ export default function PlayerAvatar({
 
   const isBanker =
     !!globalState.lobby &&
-    (player?._id.$oid ?? '') === globalState.lobby.banker.$oid;
+    (player?.id.$oid ?? '') === globalState.lobby.banker.$oid;
 
-  const avatarUrl = `https://avatar.home.spgill.me/6.x/adventurer-neutral/svg?flip=true&seed=${player?._id.$oid}`;
+  const avatarUrl = `https://avatar.home.spgill.me/6.x/adventurer-neutral/svg?flip=true&seed=${player?.id.$oid}`;
 
   return (
     <StyledPlayerAvatar

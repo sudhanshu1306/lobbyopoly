@@ -1,41 +1,51 @@
 # stdlib imports
 import datetime
 import random
+import typing
 
 # vendor imports
+import beanie
 import fastapi
+import starsessions
 
 # local imports
 from . import helpers, strings, model, socket
 
 
-async def validateSession(request: fastapi.Request):
+async def validateSession(
+    request: fastapi.Request,
+) -> tuple[
+    typing.Optional[strings.Bundle],
+    typing.Optional[model.db.Lobby],
+    typing.Optional[model.db.Player],
+]:
+    now = datetime.datetime.now()
+    await starsessions.load_session(request)
+
     # Fetch the lobby id from the session
     lobby_id = request.session.get("lobbyId", None)
     if not lobby_id:
         return (strings.Bundle.ERROR_SESSION_INVALID, None, None)
 
-    db = model.db.get_db()
-    lobby_document = await db[model.db.Lobby.collection].find_one(
-        {
-            "_id": model.db.ObjectId(lobby_id),
-            "expires": {"$gt": datetime.datetime.utcnow()},
-            "disbanded": False,
-        }
-    )
+    lobby_document = await model.db.Lobby.get(lobby_id)
 
-    if lobby_document is None:
+    # If the lobby no longer exists OR the lobby has expired OR the lobby has
+    # been disbanded, then we return invalid lobby
+    if (
+        lobby_document is None
+        or lobby_document.expires < now
+        or lobby_document.disbanded
+    ):
         return (strings.Bundle.ERROR_LOBBY_INVALID, None, None)
 
     # Fetch the player from the lobby document
-    lobby = model.db.Lobby.parse_obj(lobby_document)
-    player = lobby.get_player(
-        model.db.ObjectId(request.session.get("playerId", ""))
+    player = lobby_document.get_player(
+        beanie.PydanticObjectId(request.session.get("playerId", None))
     )
     if player is None:
         return (strings.Bundle.ERROR_PLY_NOT_ACTIVE, None, None)
 
-    return (None, lobby, player)
+    return (None, lobby_document, player)
 
 
 transferEntityStrings = {
@@ -109,16 +119,19 @@ async def api_create(request: fastapi.Request, form: model.db.CreateLobbyForm):
 
     Returns the join code of the new lobby.
     """
-    now = datetime.datetime.utcnow()
-    db = model.db.get_db()
+    now = datetime.datetime.now(datetime.timezone.utc)
 
     # Fetch a list of existing (valid) lobby codes, and generate a new one until
     # a unique one is found.
-    existingCodes: list[str] = (
-        await db[model.db.Lobby.collection]
-        .find({"expires": {"$gt": now}, "disbanded": False})
-        .distinct("code")
+    living_lobbies = (
+        await model.db.Lobby.find(
+            model.db.Lobby.expires > now, model.db.Lobby.disbanded == False
+        )
+        .project(model.db.LobbyCodeProjection)
+        .to_list()
     )
+    existingCodes: set[str] = set(doc.code for doc in living_lobbies)
+
     lobbyCode: str = ""
     while True:
         lobbyCode = randomCode()
@@ -137,8 +150,7 @@ async def api_create(request: fastapi.Request, form: model.db.CreateLobbyForm):
         bank=form.bankBalance,
         freeParking=0,
     )
-
-    await db[model.db.Lobby.collection].insert_one(lobby.document())
+    await lobby.insert()
 
     return helpers.composeResponse({"id": str(lobby.id), "code": lobby.code})
 
@@ -156,17 +168,16 @@ async def api_join(request: fastapi.Request, form: model.db.JoinLobbyForm):
 
     # If a code was given,
     # check the code to make sure that the lobby actually exists
-    db = model.db.get_db()
-    lobby_doc = await db[model.db.Lobby.collection].find_one(
-        {
-            "code": form.code.upper(),
-            "expires": {"$gt": now},
-            "disbanded": False,
-        }
+    lobby = await model.db.Lobby.find_one(
+        model.db.Lobby.code == form.code.upper(),
+        model.db.Lobby.expires > now,
+        model.db.Lobby.disbanded == False,
     )
-    if lobby_doc is None:
+    if lobby is None:
         return helpers.composeError(strings.Bundle.ERROR_LOBBY_CODE_INVALID)
-    lobby = model.db.Lobby.parse_document(lobby_doc)
+
+    # Type guard for the lobby ID
+    assert lobby.id is not None
 
     # Double check there's enough room (maximum of 8 players)
     if len(lobby.players) >= lobby.options.maxPlayers:
@@ -184,7 +195,7 @@ async def api_join(request: fastapi.Request, form: model.db.JoinLobbyForm):
     # Log an event announcing the player has joined the game
     join_event = model.db.Event(
         lobby=lobby.id,
-        time=datetime.datetime.utcnow(),
+        time=datetime.datetime.now(datetime.timezone.utc),
         key=strings.Bundle.EVENT_PLY_JOIN.name,
         inserts=[playerInsert(player), currencyInsert(player.balance)],
     )
@@ -197,7 +208,7 @@ async def api_join(request: fastapi.Request, form: model.db.JoinLobbyForm):
         lobby.banker = player.id
         banker_event = model.db.Event(
             lobby=lobby.id,
-            time=datetime.datetime.utcnow(),
+            time=datetime.datetime.now(datetime.timezone.utc),
             key=strings.Bundle.EVENT_PLY_MADE_BANKER.name,
             inserts=[playerInsert(player)],
         )
@@ -205,12 +216,13 @@ async def api_join(request: fastapi.Request, form: model.db.JoinLobbyForm):
         new_events.append(banker_event)
 
     # Save changes to the lobby
-    await lobby.update()
+    await lobby.save()
 
     # Broadcast the lobby updates and new events to all players
     await socket.manager.broadcast_update(lobby, new_events)
 
     # Store the lobby id and player id in the player's session
+    await starsessions.load_session(request)
     request.session["lobbyId"] = str(lobby.id)
     request.session["playerId"] = str(player.id)
 
@@ -278,7 +290,9 @@ async def api_transfer(
         elif destination is strings.TransferEntity.FP:
             lobby.freeParking += amount
     else:
-        destinationPlayer = lobby.get_player(model.db.ObjectId(destination))
+        destinationPlayer = lobby.get_player(
+            beanie.PydanticObjectId(destination)
+        )
         if destinationPlayer is None:
             return helpers.composeError(
                 strings.Bundle.ERROR_TRANSFER_INVALID_DEST
@@ -289,9 +303,10 @@ async def api_transfer(
     sourceInsert = bundleInsert(transferEntityStrings[source])
 
     # Almost there, we just gotta log the transfer
+    assert lobby.id
     event = model.db.Event(
         lobby=lobby.id,
-        time=datetime.datetime.utcnow(),
+        time=datetime.datetime.now(datetime.timezone.utc),
         key=strings.Bundle.EVENT_TRANSFER.name,
         inserts=[
             playerInsert(player),
@@ -300,10 +315,10 @@ async def api_transfer(
             destinationInsert,
         ],
     )
-    await event.insert()
+    await event.create()
 
     # Finally, save changes to the lobby document and broadcast the updates
-    await lobby.update()
+    await lobby.save()
     await socket.manager.broadcast_update(lobby, [event])
 
     # If all is well, just return True
@@ -333,16 +348,17 @@ async def api_leave(request: fastapi.Request):
     lobby.players.remove(player)
 
     # Log the event
+    assert lobby.id
     event = model.db.Event(
         lobby=lobby.id,
-        time=datetime.datetime.utcnow(),
+        time=datetime.datetime.now(datetime.timezone.utc),
         key=strings.Bundle.EVENT_PLY_LEAVE.name,
         inserts=[],
     )
-    await event.insert()
+    await event.create()
 
     # Save changes to the lobby and broadcast them to the websockets
-    await lobby.update()
+    await lobby.save()
     await socket.manager.broadcast_update(lobby, [event])
 
     # Finally, zero out the player's session
@@ -370,9 +386,10 @@ async def api_disband(request: fastapi.Request):
 
     # Mark the lobby as disbanded
     lobby.disbanded = True
-    await lobby.update()
+    await lobby.save()
 
     # Log the event and broadcast it
+    assert lobby.id
     event = model.db.Event(
         lobby=lobby.id,
         time=datetime.datetime.utcnow(),
@@ -394,90 +411,90 @@ async def api_disband(request: fastapi.Request):
 ################################################################################
 
 
-@apiRouter.get("/api/promote/{target_id_str}")
-async def api_promote(request: fastapi.Request, target_id_str: str):
-    """
-    API method to transfer banker responsibilities from one player to another
-    """
-    # Verify that the lobby and player are valid. Return any errors
-    (error, lobby, player) = await validateSession(request)
-    if error:
-        return helpers.composeError(error)
-    elif lobby is None or player is None:
-        return helpers.composeError(strings.Bundle.ERROR_UNKNOWN)
+# @apiRouter.get("/api/promote/{target_id_str}")
+# async def api_promote(request: fastapi.Request, target_id_str: str):
+#     """
+#     API method to transfer banker responsibilities from one player to another
+#     """
+#     # Verify that the lobby and player are valid. Return any errors
+#     (error, lobby, player) = await validateSession(request)
+#     if error:
+#         return helpers.composeError(error)
+#     elif lobby is None or player is None:
+#         return helpers.composeError(strings.Bundle.ERROR_UNKNOWN)
 
-    # Make sure the current player is the banker
-    if player.id != lobby.banker:
-        return helpers.composeError(strings.Bundle.ERROR_PLY_NOT_BANKER)
+#     # Make sure the current player is the banker
+#     if player.id != lobby.banker:
+#         return helpers.composeError(strings.Bundle.ERROR_PLY_NOT_BANKER)
 
-    target_id = model.db.ObjectId(target_id_str)
-    target = lobby.get_player(target_id)
-    if target is None:
-        return helpers.composeError(strings.Bundle.ERROR_PLY_NOT_FOUND)
+#     target_id = model.db.ObjectId(target_id_str)
+#     target = lobby.get_player(target_id)
+#     if target is None:
+#         return helpers.composeError(strings.Bundle.ERROR_PLY_NOT_FOUND)
 
-    # Log the transfer of power
-    event = model.db.Event(
-        lobby=lobby.id,
-        time=datetime.datetime.utcnow(),
-        key=strings.Bundle.EVENT_PLY_TRANSFER_BANKER.name,
-        inserts=[playerInsert(player), playerInsert(target)],
-    )
-    await event.insert()
+#     # Log the transfer of power
+#     event = model.db.Event(
+#         lobby=lobby.id,
+#         time=datetime.datetime.utcnow(),
+#         key=strings.Bundle.EVENT_PLY_TRANSFER_BANKER.name,
+#         inserts=[playerInsert(player), playerInsert(target)],
+#     )
+#     await event.insert()
 
-    # Update the banker in the lobby doc and broadcast the changes
-    lobby.banker = target_id
-    await lobby.update()
-    await socket.manager.broadcast_update(lobby, [event])
+#     # Update the banker in the lobby doc and broadcast the changes
+#     lobby.banker = target_id
+#     await lobby.update()
+#     await socket.manager.broadcast_update(lobby, [event])
 
-    return helpers.composeResponse()
+#     return helpers.composeResponse()
 
 
-@apiRouter.get("/api/kick/{target_id_str}")
-async def api_kick(request: fastapi.Request, target_id_str: str):
-    """
-    API method for current player to leave lobby
-    """
-    # Verify that the lobby and player are valid. Return any errors
-    (error, lobby, player) = await validateSession(request)
-    if error:
-        return helpers.composeError(error)
-    elif lobby is None or player is None:
-        return helpers.composeError(strings.Bundle.ERROR_UNKNOWN)
+# @apiRouter.get("/api/kick/{target_id_str}")
+# async def api_kick(request: fastapi.Request, target_id_str: str):
+#     """
+#     API method for current player to leave lobby
+#     """
+#     # Verify that the lobby and player are valid. Return any errors
+#     (error, lobby, player) = await validateSession(request)
+#     if error:
+#         return helpers.composeError(error)
+#     elif lobby is None or player is None:
+#         return helpers.composeError(strings.Bundle.ERROR_UNKNOWN)
 
-    # Make sure the current player is the banker
-    if player.id != lobby.banker:
-        return helpers.composeError(strings.Bundle.ERROR_PLY_NOT_BANKER)
+#     # Make sure the current player is the banker
+#     if player.id != lobby.banker:
+#         return helpers.composeError(strings.Bundle.ERROR_PLY_NOT_BANKER)
 
-    # Parse the request data and find the target player
-    target_id = model.db.ObjectId(target_id_str)
-    target = lobby.get_player(target_id)
-    if target is None:
-        return helpers.composeError(strings.Bundle.ERROR_PLY_NOT_FOUND)
+#     # Parse the request data and find the target player
+#     target_id = model.db.ObjectId(target_id_str)
+#     target = lobby.get_player(target_id)
+#     if target is None:
+#         return helpers.composeError(strings.Bundle.ERROR_PLY_NOT_FOUND)
 
-    # Make sure the target isn't themselves
-    if target.id == player.id:
-        return helpers.composeError(strings.Bundle.ERROR_KICK_YOURSELF)
+#     # Make sure the target isn't themselves
+#     if target.id == player.id:
+#         return helpers.composeError(strings.Bundle.ERROR_KICK_YOURSELF)
 
-    # Transfer the target's balance back to the bank
-    lobby.bank += target.balance
+#     # Transfer the target's balance back to the bank
+#     lobby.bank += target.balance
 
-    # Remove the target player from the lobby
-    lobby.players.remove(target)
+#     # Remove the target player from the lobby
+#     lobby.players.remove(target)
 
-    # Log the event
-    event = model.db.Event(
-        lobby=lobby.id,
-        time=datetime.datetime.utcnow(),
-        key=strings.Bundle.EVENT_PLY_KICK.name,
-        inserts=[],
-    )
-    await event.insert()
+#     # Log the event
+#     event = model.db.Event(
+#         lobby=lobby.id,
+#         time=datetime.datetime.utcnow(),
+#         key=strings.Bundle.EVENT_PLY_KICK.name,
+#         inserts=[],
+#     )
+#     await event.insert()
 
-    # Update the lobby document and broadcast the changes
-    await lobby.update()
-    await socket.manager.broadcast_update(lobby, [event])
+#     # Update the lobby document and broadcast the changes
+#     await lobby.update()
+#     await socket.manager.broadcast_update(lobby, [event])
 
-    # Broadcast the message to kick the player from the lobby
-    await socket.manager.broadcast_kick(lobby, player)
+#     # Broadcast the message to kick the player from the lobby
+#     await socket.manager.broadcast_kick(lobby, player)
 
-    return helpers.composeResponse()
+#     return helpers.composeResponse()

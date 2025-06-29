@@ -86,7 +86,7 @@ export const globalActionReducer: GlobalActionReducerMethod = (
         ...state,
         lobby: action.lobby,
         currentPlayer: action.lobby.players.find(
-          (ply) => ply._id.$oid === state.playerId,
+          (ply) => ply.id.$oid === state.playerId,
         ),
       };
 

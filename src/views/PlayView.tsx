@@ -304,10 +304,10 @@ function BalancesCard({ onTransfer }: BalancesCardProps): JSX.Element {
 
   const { currentPlayer } = globalState;
   const currentPlayerIsBanker =
-    currentPlayer?._id.$oid === globalState.lobby?.banker.$oid;
+    currentPlayer?.id.$oid === globalState.lobby?.banker.$oid;
 
   const otherPlayers = (globalState.lobby?.players ?? [])
-    .filter((ply) => ply._id.$oid !== globalState.currentPlayer?._id.$oid)
+    .filter((ply) => ply.id.$oid !== globalState.currentPlayer?.id.$oid)
     .sort((a, b) => a.name.localeCompare(b.name));
 
   return (
@@ -335,13 +335,13 @@ function BalancesCard({ onTransfer }: BalancesCardProps): JSX.Element {
 
       {otherPlayers.map((ply) => (
         <BalanceLine
-          key={ply._id.$oid}
+          key={ply.id.$oid}
           icon={
             <PlayerAvatar
               player={ply}
               size={32}
               outline
-              crown={ply._id.$oid === globalState?.lobby?.banker.$oid}
+              crown={ply.id.$oid === globalState?.lobby?.banker.$oid}
             />
           }
           name={ply.name ?? ''}
@@ -420,7 +420,7 @@ export default function PlayView() {
                 }
 
                 const ply = globalState.lobby?.players.filter(
-                  (plyX) => plyX._id.$oid === insertValue,
+                  (plyX) => plyX.id.$oid === insertValue,
                 )[0];
 
                 switch (insertKind) {
@@ -505,7 +505,7 @@ export default function PlayView() {
               </SeparatorRow>
               <ul>
                 {[...(globalState.events ?? [])].reverse().map((event) => (
-                  <li key={event._id.$oid}>{formatEvent(event)}</li>
+                  <li key={event.id.$oid}>{formatEvent(event)}</li>
                 ))}
               </ul>
             </LogBoxInnerContainer>

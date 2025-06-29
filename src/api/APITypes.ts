@@ -23,14 +23,14 @@ export type EventInsert =
   | ['bundle', string];
 
 export interface Event {
-  _id: ObjectId;
+  id: ObjectId;
   time: Datetime;
   key: string;
   inserts: EventInsert[];
 }
 
 export interface Player {
-  _id: ObjectId;
+  id: ObjectId;
   name: string;
   balance: number;
 }
@@ -45,7 +45,7 @@ export interface CreateLobbyRequest {
 }
 
 export interface Lobby {
-  _id: ObjectId;
+  id: ObjectId;
   code: string;
   created: Datetime;
   expires: Datetime;
