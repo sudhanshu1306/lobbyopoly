@@ -47,11 +47,12 @@ export default function JoinView() {
   const [joinName, setJoinName] = React.useState('');
   const [joinError, setJoinError] = React.useState(undefined);
   const [gameOptions, setGameOptions] = React.useState({
-    unlimitedBank: false,
-    freeParking: true,
+    unlimitedBank: true,
+    freeParking: false,
+    hideBalances: true,
     maxPlayers: 8,
     bankBalance: 20580, // The original game came with $15140
-    startingBalance: 1500,
+    startingBalance: 40000,
     currency: '$',
   });
 
@@ -124,6 +125,7 @@ export default function JoinView() {
     switch (key) {
       case 'unlimitedBank':
       case 'freeParking':
+      case 'hideBalances':
         setGameOptions((prevOptions) => ({
           ...prevOptions,
           [key]: event.target.checked,
@@ -232,6 +234,18 @@ export default function JoinView() {
               label="Free parking account:"
               data-option-key="freeParking"
               checked={gameOptions.freeParking}
+              onChange={handleOptionChange}
+            />
+          </AlignedCheckBoxContainer>
+
+          <VerticalSpacer factor={0.382} />
+
+          <AlignedCheckBoxContainer>
+            <CheckBox
+              reverse
+              label="Hide other players' funds:"
+              data-option-key="hideBalances"
+              checked={gameOptions.hideBalances}
               onChange={handleOptionChange}
             />
           </AlignedCheckBoxContainer>

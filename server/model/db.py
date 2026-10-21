@@ -47,6 +47,7 @@ class LobbyCurrency(enum.Enum):
 class CreateLobbyForm(FormBaseModel):
     unlimitedBank: bool
     freeParking: bool
+    hideBalances: bool = False
     maxPlayers: int
     bankBalance: int
     startingBalance: int

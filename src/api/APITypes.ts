@@ -32,12 +32,13 @@ export interface Event {
 export interface Player {
   id: ObjectId;
   name: string;
-  balance: number;
+  balance: number | null;
 }
 
 export interface CreateLobbyRequest {
   unlimitedBank: boolean;
   freeParking: boolean;
+  hideBalances: boolean;
   maxPlayers: number;
   bankBalance: number;
   startingBalance: number;

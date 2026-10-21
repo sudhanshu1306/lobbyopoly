@@ -5,6 +5,7 @@ import beanie
 import bson.json_util
 import fastapi
 import starlette.websockets
+import starsessions
 import typing
 
 # local imports
@@ -16,13 +17,21 @@ socketRouter = fastapi.APIRouter()
 
 
 def compose_update_message(
-    lobby: model.db.Lobby, events: list[model.db.Event]
+    lobby: model.db.Lobby,
+    events: list[model.db.Event],
+    viewer: typing.Optional[beanie.PydanticObjectId] = None,
 ) -> str:
+    lobby_dump = lobby.model_dump()
+    # Redact other players' balances server-side so they never reach the client
+    if lobby.options.hideBalances:
+        for ply in lobby_dump["players"]:
+            if ply["id"] != viewer:
+                ply["balance"] = None
     return bson.json_util.dumps(
         {
             "type": "update",
             "payload": {
-                "lobby": lobby.model_dump(),
+                "lobby": lobby_dump,
                 "events": [e.model_dump() for e in events],
             },
         }
@@ -40,26 +49,32 @@ def compose_kick_message(
 class ConnectionManager:
     def __init__(self) -> None:
         self.lobby_sockets: dict[
-            beanie.PydanticObjectId, list[fastapi.WebSocket]
+            beanie.PydanticObjectId,
+            list[tuple[fastapi.WebSocket, typing.Optional[beanie.PydanticObjectId]]],
         ] = {}
 
     def register_connection(
-        self, lobby_id: beanie.PydanticObjectId, sock: fastapi.WebSocket
+        self,
+        lobby_id: beanie.PydanticObjectId,
+        sock: fastapi.WebSocket,
+        player_id: typing.Optional[beanie.PydanticObjectId],
     ) -> None:
         if lobby_id not in self.lobby_sockets:
             self.lobby_sockets[lobby_id] = []
-        self.lobby_sockets[lobby_id].append(sock)
+        self.lobby_sockets[lobby_id].append((sock, player_id))
 
     def remove_connection(
         self, lobby_id: beanie.PydanticObjectId, sock: fastapi.WebSocket
     ):
         if lobby_id in self.lobby_sockets:
-            self.lobby_sockets[lobby_id].remove(sock)
+            self.lobby_sockets[lobby_id] = [
+                s for s in self.lobby_sockets[lobby_id] if s[0] is not sock
+            ]
 
     async def send_message_to_lobby(self, lobby: model.db.Lobby, message: str):
         """Send a string message to all players in a lobby."""
         assert lobby.id is not None
-        for sock in self.lobby_sockets.get(lobby.id, []):
+        for sock, _ in self.lobby_sockets.get(lobby.id, []):
             if (
                 sock.application_state
                 == starlette.websockets.WebSocketState.CONNECTED
@@ -72,9 +87,15 @@ class ConnectionManager:
         events: list[model.db.Event] = [],
     ):
         """Broadcast a new event to all players in a lobby"""
-        await self.send_message_to_lobby(
-            lobby, compose_update_message(lobby, events)
-        )
+        assert lobby.id is not None
+        for sock, player_id in self.lobby_sockets.get(lobby.id, []):
+            if (
+                sock.application_state
+                == starlette.websockets.WebSocketState.CONNECTED
+            ):
+                await sock.send_text(
+                    compose_update_message(lobby, events, player_id)
+                )
 
     async def broadcast_disband(self, lobby: model.db.Lobby):
         """Broadcast a disband message to all players in a lobby."""
@@ -108,10 +129,18 @@ async def socket_endpoint(websocket: fastapi.WebSocket, lobby_id: str):
         .sort([("time", beanie.SortDirection.ASCENDING)])
         .to_list()
     )
-    await websocket.send_text(compose_update_message(lobby, event_docs))
+    # Identify the viewing player from the session (None if not in this lobby)
+    await starsessions.load_session(websocket)
+    player_id = None
+    if websocket.session.get("lobbyId") == str(lobby.id):
+        player_id = beanie.PydanticObjectId(websocket.session.get("playerId"))
+
+    await websocket.send_text(
+        compose_update_message(lobby, event_docs, player_id)
+    )
 
     # Then register the websocket to receive future updates
-    manager.register_connection(lobby.id, websocket)
+    manager.register_connection(lobby.id, websocket, player_id)
 
     while True:
         message = await websocket.receive()
