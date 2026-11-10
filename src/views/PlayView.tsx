@@ -200,7 +200,7 @@ const BalanceBox = styled.div<{ currency: string; plain?: boolean }>`
 interface BalanceLineProps {
   icon: JSX.Element;
   name: string;
-  balance: number;
+  balance: number | null;
   isTransferable: boolean;
   onTransfer?: (entity: string) => void;
   transferEntity?: string;
@@ -222,13 +222,16 @@ function BalanceLine({
     [onTransfer, transferEntity],
   );
 
+  let balanceText = balance?.toString() ?? '???';
+  if (balance === Infinity) balanceText = '∞';
+
   return (
     <>
       {icon}
       <PlayerName>{name}</PlayerName>
       {/* <DottedSpacer /> */}
       <BalanceBox currency={globalState?.lobby?.options.currency ?? ''}>
-        {balance === Infinity ? '∞' : balance.toString()}
+        {balanceText}
       </BalanceBox>
       {isTransferable ? (
         <TransferButton
@@ -345,7 +348,7 @@ function BalancesCard({ onTransfer }: BalancesCardProps): JSX.Element {
             />
           }
           name={ply.name ?? ''}
-          balance={ply.balance ?? 0}
+          balance={ply.balance ?? null}
           isTransferable={false}
           // TODO: implement other player transfers for banker
           // isTransferable={currentPlayerIsBanker}
