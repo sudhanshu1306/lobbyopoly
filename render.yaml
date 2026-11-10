@@ -3,6 +3,7 @@ services:
   - type: web
     name: lobbyopoly
     runtime: docker
+    region: singapore
     plan: free
     healthCheckPath: /index.html
     envVars:
@@ -16,6 +17,7 @@ services:
 
   - type: keyvalue
     name: lobbyopoly-redis
+    region: singapore
     plan: free
     ipAllowList: []
     maxmemoryPolicy: noeviction

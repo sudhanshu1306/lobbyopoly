@@ -15,7 +15,7 @@ Run a single instance with a single worker: websocket connections are tracked in
 
 ## Deploy free on Render
 
-1. Create a free MongoDB Atlas M0 cluster. Add a database user and allow network access from `0.0.0.0/0` (Render's free tier has no static IP). Copy the connection string and add `/lobbyopoly` before the `?`.
+1. Create a free MongoDB Atlas M0 cluster on AWS `ap-southeast-1` (Singapore, same region as the Render services). Add a database user and allow network access from `0.0.0.0/0` (Render's free tier has no static IP). Copy the connection string and add `/lobbyopoly` before the `?`.
 2. In Render: **New > Blueprint**, pick this repo. It creates the web service and a free Redis (Key Value) instance from `render.yaml`.
 3. Paste the Atlas string when prompted for `MONGODB_HOST`.
 
