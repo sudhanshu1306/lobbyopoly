@@ -1,0 +1,21 @@
+# Render Blueprint (free tier). MONGODB_HOST is prompted on first deploy.
+services:
+  - type: web
+    name: lobbyopoly
+    runtime: docker
+    plan: free
+    healthCheckPath: /index.html
+    envVars:
+      - key: MONGODB_HOST
+        sync: false
+      - key: REDIS_URL
+        fromService:
+          type: keyvalue
+          name: lobbyopoly-redis
+          property: connectionString
+
+  - type: keyvalue
+    name: lobbyopoly-redis
+    plan: free
+    ipAllowList: []
+    maxmemoryPolicy: noeviction

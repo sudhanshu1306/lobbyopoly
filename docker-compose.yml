@@ -1,0 +1,33 @@
+# Self-hosted stack: `DOMAIN=game.example.com docker compose up -d`
+services:
+  app:
+    image: ghcr.io/sudhanshu1306/lobbyopoly:latest
+    build: .
+    environment:
+      MONGODB_HOST: mongodb://mongo:27017/lobbyopoly
+      REDIS_URL: redis://redis:6379/0
+    depends_on: [mongo, redis]
+    restart: unless-stopped
+
+  mongo:
+    image: mongo:7
+    volumes: [mongo:/data/db]
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    command: redis-server --appendonly yes
+    volumes: [redis:/data]
+    restart: unless-stopped
+
+  caddy:
+    image: caddy:2
+    ports: ["80:80", "443:443"]
+    command: caddy reverse-proxy --from ${DOMAIN:-localhost} --to app:5000
+    volumes: [caddy:/data]
+    restart: unless-stopped
+
+volumes:
+  mongo:
+  redis:
+  caddy:
