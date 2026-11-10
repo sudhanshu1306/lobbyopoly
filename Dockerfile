@@ -1,18 +1,13 @@
 FROM python:3.11-slim-bookworm
 SHELL ["/bin/bash", "-c"]
 
-# Add Tini
-ENV TINI_VERSION v0.19.0
-ADD https://github.com/krallin/tini/releases/download/${TINI_VERSION}/tini /tini
-RUN chmod +x /tini
-
 # Copy source into image
 COPY . /tmp/lobbyopoly
 WORKDIR /tmp/lobbyopoly
 
 # Install minimal CLI utilities
 RUN apt update && \
-  apt -y install --no-install-recommends ca-certificates curl && \
+  apt -y install --no-install-recommends ca-certificates curl tini && \
   rm -rf /var/lib/apt/lists/* && \
   apt clean
 
@@ -29,11 +24,10 @@ RUN curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.39.1/install.sh | b
 RUN pip install -r requirements.txt
 
 # Environment vars
-ENV MONGODB_HOST=""
-ENV SESSION_SECRET_KEY="42"
+ENV PORT=5000
 
 # Default TCP port
 EXPOSE 5000/tcp
 
 # Run the server
-ENTRYPOINT ["/tini", "-v", "--", "./docker-entrypoint.sh"]
+ENTRYPOINT ["/usr/bin/tini", "-v", "--", "./docker-entrypoint.sh"]

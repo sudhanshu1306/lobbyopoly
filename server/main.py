@@ -1,4 +1,5 @@
 # stdlib imports
+import contextlib
 import os
 import pathlib
 
@@ -15,12 +16,16 @@ from .api import apiRouter
 from .socket import socketRouter
 from .model.db import connect_and_init_db, close_db_connect
 
-# Create the FastAPI application
-app = fastapi.FastAPI()
+# Database connection lifecycle
+@contextlib.asynccontextmanager
+async def lifespan(app: fastapi.FastAPI):
+    await connect_and_init_db()
+    yield
+    await close_db_connect()
 
-# Database connection events
-app.add_event_handler("startup", connect_and_init_db)
-app.add_event_handler("shutdown", close_db_connect)
+
+# Create the FastAPI application
+app = fastapi.FastAPI(lifespan=lifespan)
 
 # GZip compression middleware
 app.add_middleware(GZipMiddleware, minimum_size=256)
@@ -33,7 +38,11 @@ session_store = starsessions.stores.redis.RedisStore(
     os.environ.get("REDIS_URL", None)
 )
 app.add_middleware(
-    starsessions.SessionMiddleware, store=session_store, lifetime=3600 * 24 * 7
+    starsessions.SessionMiddleware,
+    store=session_store,
+    lifetime=3600 * 24 * 7,
+    # Set INSECURE_COOKIES=1 for local http dev (Safari drops Secure cookies)
+    cookie_https_only=not os.environ.get("INSECURE_COOKIES"),
 )
 
 # Attach the API routes
